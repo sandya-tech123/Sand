@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSM Fire Alert Simulator</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--text:#1c1c1a;--muted:#6b6a65;--line:#e2e0da;--ok:#2e7d32;--warn:#e69500;--alarm:#d32f2f;--accent:#c2410c;--console:#111;--consoletext:#9be39b}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--card:#211f1d;--text:#f0eee9;--muted:#a09d95;--line:#35322e;--console:#0b0b0a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:20px 16px 8px;max-width:1100px;margin:0 auto}
+h1{font-size:22px;margin:0}
+header p{margin:4px 0 0;color:var(--muted)}
+main{max-width:1100px;margin:0 auto;padding:8px 16px 32px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(310px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+label{display:flex;justify-content:space-between;font-size:14px;margin-top:10px}
+input[type=range]{width:100%}
+input[type=text],input[type=number]{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font:inherit}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+button{padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--text);font:inherit;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:hover{opacity:.85}
+.status{display:flex;align-items:center;gap:12px}
+.dot{width:18px;height:18px;border-radius:50%;background:var(--ok);flex:none}
+.dot.warn{background:var(--warn)}.dot.alarm{background:var(--alarm);animation:blink .5s infinite alternate}
+@keyframes blink{to{opacity:.25}}
+.big{font-size:24px;font-weight:700}
+.lcd{font-family:ui-monospace,Consolas,monospace;background:#9fb98a;color:#1d2a14;padding:10px 12px;border-radius:6px;margin-top:12px;white-space:pre;font-size:14px}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:12px;font-size:14px}
+.kv span:nth-child(odd){color:var(--muted)}
+.console{background:var(--console);color:var(--consoletext);font:12.5px/1.45 ui-monospace,Consolas,monospace;padding:10px;border-radius:8px;height:260px;overflow:auto;white-space:pre-wrap}
+.console .tx{color:#7fc4ff}.console .sys{color:#c9c9c9}.console .err{color:#ff8a80}
+.phone{border:2px solid var(--line);border-radius:18px;padding:12px;min-height:200px;background:var(--bg)}
+.sms{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:8px;font-size:13.5px;white-space:pre-wrap}
+.sms small{display:block;color:var(--muted)}
+.empty{color:var(--muted);text-align:center;margin-top:70px}
+.wide{grid-column:1/-1}
+</style>
+</head>
+<body>
+<header>
+<h1>GSM Based Fire Alert System — Simulator</h1>
+<p>Software model of the sensor logic, buzzer, LCD and SIM800L-style GSM module. Adjust the sensors and watch the alert flow.</p>
+</header>
+<main>
+<section class="card">
+<h2>Sensors (input)</h2>
+<label><span>Temperature</span><b id="tv"></b></label>
+<input id="temp" type="range" min="20" max="120" value="28">
+<label><span>Smoke level (MQ-2)</span><b id="sv"></b></label>
+<input id="smoke" type="range" min="0" max="1000" value="80">
+<label><span>Flame sensor</span><b id="fv"></b></label>
+<div class="row"><button id="flameBtn">Toggle flame</button></div>
+<div class="row">
+<button class="primary" id="scenario">Run fire scenario</button>
+<button id="reset">Reset</button>
+</div>
+</section>
+
+<section class="card">
+<h2>Controller state</h2>
+<div class="status"><div class="dot" id="dot"></div><div class="big" id="state">NORMAL</div></div>
+<div class="lcd" id="lcd"></div>
+<div class="kv">
+<span>Buzzer</span><b id="buzz">OFF</b>
+<span>SMS sent</span><b id="count">0</b>
+<span>Last alert</span><b id="last">—</b>
+</div>
+</section>
+
+<section class="card">
+<h2>Configuration</h2>
+<label><span>Temperature threshold (°C)</span></label>
+<input id="tTh" type="number" value="55">
+<label><span>Smoke threshold (ppm)</span></label>
+<input id="sTh" type="number" value="400">
+<label><span>Repeat SMS every (seconds)</span></label>
+<input id="cool" type="number" value="30">
+<label><span>Alert numbers (comma separated)</span></label>
+<input id="nums" type="text" value="+910000000001, +910000000002">
+</section>
+
+<section class="card">
+<h2>GSM module console (AT commands)</h2>
+<div class="console" id="console"></div>
+</section>
+
+<section class="card">
+<h2>Recipient phone (inbox)</h2>
+<div class="phone" id="phone"><div class="empty">No messages</div></div>
+</section>
+
+<section class="card">
+<h2>Detection rules</h2>
+<p style="margin:0;font-size:14px">
+<b>NORMAL</b> – all readings below thresholds.<br>
+<b>WARNING</b> – temperature or smoke above its threshold (buzzer beeps, no SMS).<br>
+<b>ALARM</b> – flame detected, or temperature and smoke both above thresholds (buzzer on, SMS sent to every number, repeated after the interval while the alarm lasts).
+</p>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let flame = false, state = 'NORMAL', sent = 0, lastSms = 0, busy = false, scenarioTimer = null, gsmReady = false;
+
+function log(msg, cls){
+  const c = $('console'), d = document.createElement('div');
+  d.className = cls || 'sys';
+  d.textContent = msg;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const now = () => new Date().toLocaleTimeString();
+
+async function at(cmd, reply, delay){
+  log('> ' + cmd, 'tx');
+  await wait(delay || 250);
+  (Array.isArray(reply) ? reply : [reply]).forEach(l => log(l));
+}
+
+async function initGsm(){
+  log('[SYSTEM] Powering GSM module...');
+  await wait(400);
+  await at('AT', 'OK');
+  await at('AT+CPIN?', ['+CPIN: READY', 'OK']);
+  await at('AT+CREG?', ['+CREG: 0,1', 'OK']);
+  await at('AT+CMGF=1', 'OK');
+  gsmReady = true;
+  log('[SYSTEM] GSM ready (network registered).');
+}
+
+async function sendSms(number, text){
+  await at('AT+CMGS="' + number + '"', '> ', 200);
+  log('> ' + text.replace(/\n/g, ' | '), 'tx');
+  log('> <Ctrl+Z>', 'tx');
+  await wait(600);
+  sent++;
+  log('+CMGS: ' + sent);
+  log('OK');
+  $('count').textContent = sent;
+  addInbox(number, text);
+}
+
+function addInbox(number, text){
+  const p = $('phone');
+  if (p.querySelector('.empty')) p.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'sms';
+  const s = document.createElement('small');
+  s.textContent = 'To ' + number + ' · ' + now();
+  d.appendChild(s);
+  d.appendChild(document.createTextNode(text));
+  p.prepend(d);
+}
+
+async function dispatchAlert(t, sm){
+  if (busy) return;
+  busy = true;
+  if (!gsmReady) await initGsm();
+  const nums = $('nums').value.split(',').map(x => x.trim()).filter(Boolean);
+  const text = 'FIRE ALERT!\nTemp: ' + t + 'C Smoke: ' + sm + 'ppm Flame: ' + (flame ? 'YES' : 'NO') + '\nTime: ' + now();
+  for (const n of nums) await sendSms(n, text);
+  lastSms = Date.now();
+  $('last').textContent = now();
+  busy = false;
+}
+
+function evaluate(){
+  const t = +$('temp').value, sm = +$('smoke').value;
+  const tTh = +$('tTh').value, sTh = +$('sTh').value;
+  const hot = t >= tTh, smoky = sm >= sTh;
+  let next = 'NORMAL';
+  if (flame || (hot && smoky)) next = 'ALARM';
+  else if (hot || smoky) next = 'WARNING';
+
+  $('tv').textContent = t + ' °C';
+  $('sv').textContent = sm + ' ppm';
+  $('fv').textContent = flame ? 'FIRE DETECTED' : 'No flame';
+
+  if (next !== state){
+    log('[' + now() + '] State: ' + state + ' -> ' + next);
+    state = next;
+  }
+  $('state').textContent = state;
+  const dot = $('dot');
+  dot.className = 'dot' + (state === 'WARNING' ? ' warn' : state === 'ALARM' ? ' alarm' : '');
+  $('buzz').textContent = state === 'ALARM' ? 'ON (continuous)' : state === 'WARNING' ? 'BEEPING' : 'OFF';
+  $('lcd').textContent = 'T:' + t + 'C  S:' + sm + 'ppm\n' + (state === 'ALARM' ? '!! FIRE ALERT !!' : state === 'WARNING' ? 'WARNING' : 'System Normal ');
+
+  if (state === 'ALARM'){
+    const cool = Math.max(5, +$('cool').value || 30) * 1000;
+    if (!lastSms || Date.now() - lastSms >= cool) dispatchAlert(t, sm);
+  } else {
+    lastSms = 0;
+  }
+}
+
+$('flameBtn').onclick = () => { flame = !flame; evaluate(); };
+['temp','smoke','tTh','sTh'].forEach(id => $(id).addEventListener('input', evaluate));
+
+$('scenario').onclick = () => {
+  clearInterval(scenarioTimer);
+  flame = false; $('temp').value = 28; $('smoke').value = 80;
+  log('[SYSTEM] Fire scenario started.');
+  let step = 0;
+  scenarioTimer = setInterval(() => {
+    step++;
+    $('temp').value = Math.min(120, 28 + step * 4);
+    $('smoke').value = Math.min(1000, 80 + step * 35);
+    if (step === 14) flame = true;
+    evaluate();
+    if (step >= 20) clearInterval(scenarioTimer);
+  }, 500);
+};
+
+$('reset').onclick = () => {
+  clearInterval(scenarioTimer);
+  flame = false; $('temp').value = 28; $('smoke').value = 80;
+  sent = 0; lastSms = 0; $('count').textContent = 0; $('last').textContent = '—';
+  $('console').innerHTML = ''; $('phone').innerHTML = '<div class="empty">No messages</div>';
+  gsmReady = false; state = 'NORMAL';
+  evaluate();
+};
+
+setInterval(evaluate, 1000);
+evaluate();
+log('[SYSTEM] Simulator ready.');
+</script>
+</body>
+</html>
